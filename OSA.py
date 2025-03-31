@@ -42,117 +42,62 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 import os
+import pyvisa as visa
 
 class OSA:
-    def __init__(self, address, port):
+    def __init__(self, address):
         self.address = address
-        self.port = port
-        self.socket = None
+        self.osamain = None
         self.data = []  # Array to store data
         self.sweep_modes = {
             "SINGLE": 1,
             "REPEAT": 2,
             "AUTO": 3
         }
+        self.sensitivies = ["NHLD", "NAUT", "MID", "HIGH1", "HIGH2", "HIGH3", "NORMAL"]
+        self.sweep_speeds = ["1x", "2x"]
 
-    def open_socket(self):
-        '''
-        Opens ethernet socket connection
-        '''
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(20)
-
-            #Connect to socket
-            self.socket.connect((self.address, self.port))
-            print("Connection established with device at", self.address)
-        except Exception as e:
-            print("Error:", e)
-
-    def close_socket(self):
-        '''
-        Closes ethernet socket connection
-        '''
-        if self.socket:
-            self.socket.close()
-            print("Connection closed.")
-
-    def send_command(self, command):
-        '''
-        This function sends remote commands to the OSA.
-        '''
-        try:
-            if self.socket:
-                #Send remote command to OSA
-                self.socket.send((command + "\r\n").encode())
-                time.sleep(0.2)
-            else:
-                print("Socket not initialized.")
-        except Exception as e:
-            print("Error:", e)
-
-    def __query__(self, command):
-        '''
-        This method is used to query data from the OSA
-        '''
-        self.send_command(command)
-        try:
-            if self.socket:
-                received_data = b''
-                while True:
-                    try:
-                        chunk = self.socket.recv(4096)
-                        if not chunk:
-                            break
-                        received_data += chunk
-                        time.sleep(0.2)  # Small delay to ensure complete reception
-                    except socket.timeout:
-                        print("Socket timed out, stopping reception.")
-                        break
-                print(f"Received data length: {len(received_data)}")
-                return received_data.decode('utf-8', errors='ignore')
-            else:
-                print("Socket not initialized.")
-                return None
-        except Exception as e:
-            print("Error receiving trace data:", e)
-            return None
-
-    def initialize_connection(self):
-        '''
-        This method initializes connection to the OSA.
-        '''
-        try:
-            self.open_socket()
-            self.send_command("open \"anonymous\"")
-        except Exception as e:
-            print("Error initializing connection:", e)
+    def initialize(self):
+        rm = visa.ResourceManager()
+        self.osamain = rm.open_resource(self.address, timeout=20000)
 
     def set_start_wavelength(self, wavelength_start):
         '''
         This method sets the starting wavelength of the OSA.
         '''
-        self.send_command(f":sens:wav:start {wavelength_start}nm")
+        self.osamain.write(f":sens:wav:start {wavelength_start}nm")
 
     def set_stop_wavelength(self, wavelength_stop):
         '''
         This method sets the stop wavelength of the OSA.
         '''
-        self.send_command(f":sens:wav:stop {wavelength_stop}nm")
+        self.osamain.write(f":sens:wav:stop {wavelength_stop}nm")
 
     def set_wavelength_range(self, wavelength_start, wavelength_stop):
         '''
         This method sets the wavelength range of the OSA.
         '''
-        self.send_command(f":sens:wav:start {wavelength_start}nm")
+        self.osamain.write(f":sens:wav:start {wavelength_start}nm")
 
-        self.send_command(f":sens:wav:stop {wavelength_stop}nm")
+        self.osamain.write(f":sens:wav:stop {wavelength_stop}nm")
 
     def set_wavelength_span(self, span):
         '''
         This method sets the span of the wavelength range.
         '''
-        self.send_command(f":sens:wav:span {span}nm")
+        self.osamain.write(f":sens:wav:span {span}nm")
+
+    def set_center_wavelength(self, wavelength):
+        '''
+        This method sets the center wavelength.
+        '''
+        self.osamain.write(f":SENSe:WAVelength:CENTer {wavelength}nm")
+
+    def set_center_frequency(self, frequency):
+        '''
+        This method sets the center wavelength.
+        '''
+        self.osamain.write(f":SENSe:WAVelength:CENTer {frequency}Hz")
 
     def set_sweep_mode(self, sweep_mode):
         '''
@@ -160,77 +105,126 @@ class OSA:
         are 'AUTO', 'REPEAT', and 'SINGLE.'
         '''
         if sweep_mode in self.sweep_modes.keys():
-            self.command(f":init:smode {self.sweep_modes[sweep_mode]}")
+            self.osamain.write(f":init:smode {self.sweep_modes[sweep_mode]}")
         else:
             raise Exception(f"Invalid sweep mode! Sweep modes are {self.sweep_modes.keys()}")
+        
+    def set_sweep_speed(self, sweep_speed):
+        '''
+        This method sets the speed for wavelength sweep. Choices
+        are '1X', '2X'.
+        '''
+        if sweep_speed in self.sweep_speeds:
+            self.osamain.write(f":SENSe:SWEep:SPEed {sweep_speed}")
+        else:
+            raise Exception(f"Invalid sweep mode! Sweep speeds are {self.sweep_speeds}")
+        
     def set_resolution(self, resolution):
         '''
         This method sets the resolution of the OSA in nanometers.
         '''
-        self.send_command(f":sens:band:resolution {resolution}nm")
+        self.osamain.write(f":sens:band:resolution {resolution}nm")
 
     def get_single_trace(self, wavelength_start, wavelength_stop):
         '''
         This method is used to get a trace of an optical spectrum.
         '''
         try:
-            self.initialize_connection()
-
             #Resets device
-            self.send_command("*RST")
+            self.osamain.write("*RST")
 
             #Sets GPIB command format
-            self.send_command("CFORM1")
+            self.osamain.write("CFORM1")
 
             #Set wavelength range
-            self.send_command(f":sens:wav:start {wavelength_start}nm")
-            self.send_command(f":sens:wav:stop {wavelength_stop}nm")
+            self.osamain.write(f":sens:wav:start {wavelength_start}nm")
+            self.osamain.write(f":sens:wav:stop {wavelength_stop}nm")
 
             #Sets measurement sensitivity to high
-            self.send_command(":sens:sens HIGH2")
+            self.osamain.write(":sens:sens HIGH2")
 
             #Set wavelength sweep speed
-            self.send_command(":sens:sens:speed 2x")
+            self.osamain.write(":sens:sens:speed 2x")
 
             #Sets automatic sampling of points
-            self.send_command(":sens:sweep:points:auto on")
+            self.osamain.write(":sens:sweep:points:auto on")
             print("Preconfig done")
 
             #Initiates sweep mode to SINGLE sweep
-            self.send_command(":init:smode 1")
+            self.osamain.write(":init:smode 1")
             print("SMODE set")
 
             #Clears status register
-            self.send_command("*CLS")
+            self.osamain.write("*CLS")
             print("CLS command sent")
 
             #Initiates wavelength sweep
-            self.send_command(":init")
+            self.osamain.write(":init")
             print("INIT command sent")
 
             #Gets trace
-            trace_data = self.__query__(':TRACE:Y? TRA')
+            trace_data = self.osamain.query(':TRACE:Y? TRA')
             print("Query done")
             print(trace_data[:40])
 
             if trace_data:
-                if 'ready' in trace_data:
+                intensities = np.array([float(val) for val in trace_data.split(',')])
+                wavelengths = np.linspace(wavelength_start, wavelength_stop, len(intensities))
+                return wavelengths, intensities
 
-                    #Parses trace data format
-                    text_after_ready = trace_data.split('ready', 1)[1]
+        except Exception as e:
+            print("Error getting single trace:", e)
 
-                    #Creates array of intensities
-                    intensities = np.array([float(intensity) for intensity in text_after_ready.split(",") if intensity.strip()])
+    def get_single_trace_with_params(self, wavelength_start, wavelength_stop, sensitivity, sweep_speed, sweep_mode):
+        '''
+        This method is used to get a trace of an optical spectrum that is parameterized.
+        '''
+        try:
+            #Resets device
+            self.osamain.write("*RST")
 
+            #Sets GPIB command format
+            self.osamain.write("CFORM1")
 
-                    # Use the wavelength from the current measurement
-                    wavelengths = np.linspace(wavelength_start, wavelength_stop, len(intensities))
+            #Set wavelength range
+            self.osamain.write(f":sens:wav:start {wavelength_start}nm")
+            self.osamain.write(f":sens:wav:stop {wavelength_stop}nm")
+
+            #Sets measurement sensitivity to high
+            self.osamain.write(f":sens:sens {sensitivity}")
+
+            #Set wavelength sweep speed
+            self.osamain.write(f":sens:sens:speed {sweep_speed}")
+
+            #Sets automatic sampling of points
+            self.osamain.write(f":sens:sweep:points:auto on")
+            print("Preconfig done")
+
+            #Initiates sweep mode to SINGLE sweep
+            self.osamain.write(f":init:smode {self.sweep_modes[sweep_mode]}")
+            print("SMODE set")
+
+            #Clears status register
+            self.osamain.write("*CLS")
+            print("CLS command sent")
+
+            #Initiates wavelength sweep
+            self.osamain.write(":init")
+            print("INIT command sent")
+
+            #Gets trace
+            trace_data = self.osamain.query(':TRACE:Y? TRA')
+            print("Query done")
+            print(trace_data[:40])
+
+            if trace_data:
+                intensities = np.array([float(val) for val in trace_data.split(',')])
+                wavelengths = np.linspace(wavelength_start, wavelength_stop, len(intensities))
+                return wavelengths, intensities
 
             return wavelengths, intensities
         except Exception as e:
             print("Error getting single trace:", e)
-        finally:
-            self.close_socket()
 
     def analyze_spectrum(self):
         pass
@@ -261,5 +255,224 @@ class OSA:
         plt.grid(True)
         plt.legend()
         plt.show()
+
+# class OSA:
+#     def __init__(self, address, port):
+#         self.address = address
+#         self.port = port
+#         self.socket = None
+#         self.data = []  # Array to store data
+#         self.sweep_modes = {
+#             "SINGLE": 1,
+#             "REPEAT": 2,
+#             "AUTO": 3
+#         }
+
+#     def open_socket(self):
+#         '''
+#         Opens ethernet socket connection
+#         '''
+#         try:
+#             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#             self.socket.settimeout(20)
+
+#             #Connect to socket
+#             self.socket.connect((self.address, self.port))
+#             print("Connection established with device at", self.address)
+#         except Exception as e:
+#             print("Error:", e)
+
+#     def close_socket(self):
+#         '''
+#         Closes ethernet socket connection
+#         '''
+#         if self.socket:
+#             self.socket.close()
+#             print("Connection closed.")
+
+#     def send_command(self, command):
+#         '''
+#         This function sends remote commands to the OSA.
+#         '''
+#         try:
+#             if self.socket:
+#                 #Send remote command to OSA
+#                 self.socket.send((command + "\r\n").encode())
+#                 time.sleep(0.2)
+#             else:
+#                 print("Socket not initialized.")
+#         except Exception as e:
+#             print("Error:", e)
+
+#     def __query__(self, command):
+#         '''
+#         This method is used to query data from the OSA
+#         '''
+#         self.send_command(command)
+#         try:
+#             if self.socket:
+#                 received_data = b''
+#                 while True:
+#                     try:
+#                         chunk = self.socket.recv(4096)
+#                         if not chunk:
+#                             break
+#                         received_data += chunk
+#                         time.sleep(0.2)  # Small delay to ensure complete reception
+#                     except socket.timeout:
+#                         print("Socket timed out, stopping reception.")
+#                         break
+#                 print(f"Received data length: {len(received_data)}")
+#                 return received_data.decode('utf-8', errors='ignore')
+#             else:
+#                 print("Socket not initialized.")
+#                 return None
+#         except Exception as e:
+#             print("Error receiving trace data:", e)
+#             return None
+
+#     def initialize_connection(self):
+#         '''
+#         This method initializes connection to the OSA.
+#         '''
+#         try:
+#             self.open_socket()
+#             self.send_command("open \"anonymous\"")
+#         except Exception as e:
+#             print("Error initializing connection:", e)
+
+#     def set_start_wavelength(self, wavelength_start):
+#         '''
+#         This method sets the starting wavelength of the OSA.
+#         '''
+#         self.send_command(f":sens:wav:start {wavelength_start}nm")
+
+#     def set_stop_wavelength(self, wavelength_stop):
+#         '''
+#         This method sets the stop wavelength of the OSA.
+#         '''
+#         self.send_command(f":sens:wav:stop {wavelength_stop}nm")
+
+#     def set_wavelength_range(self, wavelength_start, wavelength_stop):
+#         '''
+#         This method sets the wavelength range of the OSA.
+#         '''
+#         self.send_command(f":sens:wav:start {wavelength_start}nm")
+
+#         self.send_command(f":sens:wav:stop {wavelength_stop}nm")
+
+#     def set_wavelength_span(self, span):
+#         '''
+#         This method sets the span of the wavelength range.
+#         '''
+#         self.send_command(f":sens:wav:span {span}nm")
+
+#     def set_sweep_mode(self, sweep_mode):
+#         '''
+#         This method sets the mode for wavelength sweep. Choices
+#         are 'AUTO', 'REPEAT', and 'SINGLE.'
+#         '''
+#         if sweep_mode in self.sweep_modes.keys():
+#             self.command(f":init:smode {self.sweep_modes[sweep_mode]}")
+#         else:
+#             raise Exception(f"Invalid sweep mode! Sweep modes are {self.sweep_modes.keys()}")
+#     def set_resolution(self, resolution):
+#         '''
+#         This method sets the resolution of the OSA in nanometers.
+#         '''
+#         self.send_command(f":sens:band:resolution {resolution}nm")
+
+#     def get_single_trace(self, wavelength_start, wavelength_stop):
+#         '''
+#         This method is used to get a trace of an optical spectrum.
+#         '''
+#         try:
+#             self.initialize_connection()
+
+#             #Resets device
+#             self.send_command("*RST")
+
+#             #Sets GPIB command format
+#             self.send_command("CFORM1")
+
+#             #Set wavelength range
+#             self.send_command(f":sens:wav:start {wavelength_start}nm")
+#             self.send_command(f":sens:wav:stop {wavelength_stop}nm")
+
+#             #Sets measurement sensitivity to high
+#             self.send_command(":sens:sens HIGH2")
+
+#             #Set wavelength sweep speed
+#             self.send_command(":sens:sens:speed 2x")
+
+#             #Sets automatic sampling of points
+#             self.send_command(":sens:sweep:points:auto on")
+#             print("Preconfig done")
+
+#             #Initiates sweep mode to SINGLE sweep
+#             self.send_command(":init:smode 1")
+#             print("SMODE set")
+
+#             #Clears status register
+#             self.send_command("*CLS")
+#             print("CLS command sent")
+
+#             #Initiates wavelength sweep
+#             self.send_command(":init")
+#             print("INIT command sent")
+
+#             #Gets trace
+#             trace_data = self.__query__(':TRACE:Y? TRA')
+#             print("Query done")
+#             print(trace_data[:40])
+
+#             if trace_data:
+#                 if 'ready' in trace_data:
+
+#                     #Parses trace data format
+#                     text_after_ready = trace_data.split('ready', 1)[1]
+
+#                     #Creates array of intensities
+#                     intensities = np.array([float(intensity) for intensity in text_after_ready.split(",") if intensity.strip()])
+
+
+#                     # Use the wavelength from the current measurement
+#                     wavelengths = np.linspace(wavelength_start, wavelength_stop, len(intensities))
+
+#             return wavelengths, intensities
+#         except Exception as e:
+#             print("Error getting single trace:", e)
+#         finally:
+#             self.close_socket()
+
+#     def analyze_spectrum(self):
+#         pass
+
+#     def ArrayForLabview(self, InputArray, wavelengthStart, wavelengthEnd):
+#         NumArray = InputArray.split('ready', 1)[1]
+#         OutputArray = np.array([float(numero) for numero in NumArray.split(",")])
+#         ArrayWavelength = np.linspace(wavelengthStart, wavelengthEnd, len(InputArray))
+#         return ArrayWavelength, OutputArray
+
+#     @staticmethod
+#     def save_data_to_csv(wavelengths, intensities, folder_path, iteration_count):
+#         filename = f"trace_data_{iteration_count}_Current_7_22_Pos_11_0_cm_100Hz.csv"
+#         file_path = os.path.join(folder_path, filename)
+#         with open(file_path, mode='w', newline='') as file:
+#             writer = csv.writer(file)
+#             writer.writerow(["Wavelength (nm)", "Intensity"])
+#             writer.writerows(zip(wavelengths, intensities))
+#         print(f"Data for iteration {iteration_count} saved to {file_path}")
+
+#     @staticmethod
+#     def plot_data(wavelengths, intensities, iteration_count):
+#         plt.figure(figsize=(10, 6))
+#         plt.plot(wavelengths, intensities, label=f'Intensity {iteration_count}', color='b')
+#         plt.title(f'Intensity Spectrum Iteration {iteration_count}')
+#         plt.xlabel('Wavelength (nm)')
+#         plt.ylabel('Intensity')
+#         plt.grid(True)
+#         plt.legend()
+#         plt.show()
 
 
